@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Settings,
   Shield,
@@ -18,6 +18,8 @@ import {
   Trash2,
   KeyRound,
   UserCheck,
+  Upload,
+  RotateCcw,
 } from 'lucide-react';
 import { Club, UserProfile, UserRole } from '../types/index.ts';
 import { isSupabaseConfigured } from '../services/supabaseClient.ts';
@@ -49,6 +51,36 @@ interface SettingsViewProps {
   onDeleteLeadershipMember: (userId: string) => Promise<void>;
 }
 
+// Reduz a imagem para no máximo 400px no maior lado, para não estourar o
+// armazenamento do navegador. Mantém transparência (PNG).
+function resizeImageToDataUrl(file: File, maxSize = 400): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não foi possível ler o arquivo de imagem.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('O arquivo selecionado não é uma imagem válida.'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Seu navegador não conseguiu processar a imagem.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   club,
   currentUser,
@@ -74,6 +106,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [successMsg, setSuccessMsg] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
 
+  // Club logo
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
+
   // Add leadership member form
   const [newMemberName, setNewMemberName] = useState<string>('');
   const [newMemberEmail, setNewMemberEmail] = useState<string>('');
@@ -86,6 +122,52 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
 
   const isAdminOrDirector = currentUser.role === 'admin' || currentUser.role === 'diretor';
+
+  const handleLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Permite escolher o mesmo arquivo novamente depois
+    e.target.value = '';
+    if (!file) return;
+
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (!file.type.startsWith('image/')) {
+      setErrorMsg('Escolha um arquivo de imagem (PNG, JPG ou WEBP).');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setErrorMsg('A imagem é muito grande. Use um arquivo de até 8 MB.');
+      return;
+    }
+
+    try {
+      setIsUploadingLogo(true);
+      const dataUrl = await resizeImageToDataUrl(file, 400);
+      await onUpdateClub({ logoUrl: dataUrl });
+      setIsUploadingLogo(false);
+      setSuccessMsg('Logo do clube atualizada! Ela já aparece na página inicial.');
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err: any) {
+      setIsUploadingLogo(false);
+      setErrorMsg(err.message || 'Erro ao atualizar a logo do clube.');
+    }
+  };
+
+  const handleRestoreDefaultLogo = async () => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      setIsUploadingLogo(true);
+      await onUpdateClub({ logoUrl: ASSETS.crestShield });
+      setIsUploadingLogo(false);
+      setSuccessMsg('Logo padrão restaurada.');
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err: any) {
+      setIsUploadingLogo(false);
+      setErrorMsg(err.message || 'Erro ao restaurar a logo padrão.');
+    }
+  };
 
   const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -501,110 +583,185 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* Tab: Dados Gerais do Clube */}
       {activeTab === 'geral' && (
-        <form
-          onSubmit={handleSaveGeneral}
-          className="rounded-2xl border border-[#092642] bg-[#031426]/90 p-6 shadow-sm space-y-4"
-        >
-          <h2 className="text-sm font-bold text-white border-b border-[#092642] pb-3">
-            Informações do Clube de Desbravadores
-          </h2>
+        <div className="space-y-6">
+          {/* Logo do Clube */}
+          <div className="rounded-2xl border border-[#092642] bg-[#031426]/90 p-6 shadow-sm space-y-4">
+            <h2 className="text-sm font-bold text-white border-b border-[#092642] pb-3">
+              Logo do Clube
+            </h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="club-name" className="block text-xs font-semibold text-slate-200 mb-1">
-                Nome do Clube *
-              </label>
-              <input
-                id="club-name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
-                required
-              />
-            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+              <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-[#FFC21A]/40 bg-[#092642]/50">
+                <img
+                  src={club.logoUrl || ASSETS.crestShield}
+                  alt={`Logo do ${club.name}`}
+                  className="h-full w-full object-contain"
+                />
+              </div>
 
-            <div>
-              <label htmlFor="club-motto" className="block text-xs font-semibold text-slate-200 mb-1">
-                Lema Oficial do Clube
-              </label>
-              <input
-                id="club-motto"
-                type="text"
-                value={motto}
-                onChange={(e) => setMotto(e.target.value)}
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
-              />
-            </div>
+              <div className="space-y-3">
+                <p className="text-xs leading-relaxed text-[#8FA6C2]">
+                  A logo aparece na página inicial e nos demais pontos do sistema assim que for
+                  salva. Use uma imagem quadrada (PNG, JPG ou WEBP). Ela é reduzida
+                  automaticamente para não pesar no navegador.
+                </p>
 
-            <div>
-              <label htmlFor="club-region" className="block text-xs font-semibold text-slate-200 mb-1">
-                Região e Associação
-              </label>
-              <input
-                id="club-region"
-                type="text"
-                value={region}
-                onChange={(e) => setRegion(e.target.value)}
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
-              />
-            </div>
+                {isAdminOrDirector ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoChange}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={isUploadingLogo}
+                      className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFC21A] to-[#F59E0B] px-4 py-2 text-xs font-bold text-[#031426] shadow-md hover:brightness-105 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Upload className="h-4 w-4" />
+                      <span>{isUploadingLogo ? 'Enviando...' : 'Escolher nova logo'}</span>
+                    </button>
 
-            <div>
-              <label htmlFor="club-church" className="block text-xs font-semibold text-slate-200 mb-1">
-                Igreja Local Vinculada
-              </label>
-              <input
-                id="club-church"
-                type="text"
-                value={church}
-                onChange={(e) => setChurch(e.target.value)}
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="club-target-points" className="block text-xs font-semibold text-slate-200 mb-1">
-                Meta Anual para Distintivo de Excelência (Pontos)
-              </label>
-              <input
-                id="club-target-points"
-                type="number"
-                min="100"
-                max="10000"
-                value={targetPoints}
-                onChange={(e) => setTargetPoints(parseInt(e.target.value, 10) || 1000)}
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 font-mono tabular-nums text-xs text-[#FFC21A] font-bold focus:border-[#FFC21A] focus:outline-none"
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="club-units" className="block text-xs font-semibold text-slate-200 mb-1">
-                Unidades do Clube (separadas por vírgula)
-              </label>
-              <input
-                id="club-units"
-                type="text"
-                value={unitsInput}
-                onChange={(e) => setUnitsInput(e.target.value)}
-                placeholder="Ex.: Águia Real, Sentinelas, Guerreiros"
-                className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
-              />
+                    <button
+                      type="button"
+                      onClick={handleRestoreDefaultLogo}
+                      disabled={isUploadingLogo}
+                      className="flex items-center gap-2 rounded-xl border border-[#092642] bg-[#092642]/70 px-4 py-2 text-xs font-semibold text-slate-200 hover:border-[#FFC21A] hover:text-[#FFC21A] disabled:opacity-50 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      <span>Restaurar logo padrão</span>
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-300">
+                    Apenas o Administrador ou o Diretor do clube pode alterar a logo.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="flex justify-end pt-4 border-t border-[#092642]">
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFC21A] to-[#F59E0B] px-5 py-2.5 text-xs font-bold text-[#031426] shadow-md hover:brightness-105 active:scale-98 disabled:opacity-50 cursor-pointer"
-            >
-              <Save className="h-4 w-4" />
-              <span>{isSaving ? 'Salvando Alterações...' : 'Salvar Configurações'}</span>
-            </button>
-          </div>
-        </form>
+          <form
+            onSubmit={handleSaveGeneral}
+            className="rounded-2xl border border-[#092642] bg-[#031426]/90 p-6 shadow-sm space-y-4"
+          >
+            <h2 className="text-sm font-bold text-white border-b border-[#092642] pb-3">
+              Informações do Clube de Desbravadores
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="club-name" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Nome do Clube *
+                </label>
+                <input
+                  id="club-name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="club-motto" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Lema Oficial do Clube
+                </label>
+                <input
+                  id="club-motto"
+                  type="text"
+                  value={motto}
+                  onChange={(e) => setMotto(e.target.value)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="club-region" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Região e Associação
+                </label>
+                <input
+                  id="club-region"
+                  type="text"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="club-district" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Distrito
+                </label>
+                <input
+                  id="club-district"
+                  type="text"
+                  value={district}
+                  onChange={(e) => setDistrict(e.target.value)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="club-church" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Igreja Local Vinculada
+                </label>
+                <input
+                  id="club-church"
+                  type="text"
+                  value={church}
+                  onChange={(e) => setChurch(e.target.value)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="club-target-points" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Meta Anual para Distintivo de Excelência (Pontos)
+                </label>
+                <input
+                  id="club-target-points"
+                  type="number"
+                  min="100"
+                  max="10000"
+                  value={targetPoints}
+                  onChange={(e) => setTargetPoints(parseInt(e.target.value, 10) || 1000)}
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 font-mono tabular-nums text-xs text-[#FFC21A] font-bold focus:border-[#FFC21A] focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label htmlFor="club-units" className="block text-xs font-semibold text-slate-200 mb-1">
+                  Unidades do Clube (separadas por vírgula)
+                </label>
+                <input
+                  id="club-units"
+                  type="text"
+                  value={unitsInput}
+                  onChange={(e) => setUnitsInput(e.target.value)}
+                  placeholder="Ex.: Águia Real, Sentinelas, Guerreiros"
+                  className="w-full rounded-xl border border-[#092642] bg-[#092642]/50 px-3.5 py-2.5 text-xs text-white focus:border-[#FFC21A] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-[#092642]">
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFC21A] to-[#F59E0B] px-5 py-2.5 text-xs font-bold text-[#031426] shadow-md hover:brightness-105 active:scale-98 disabled:opacity-50 cursor-pointer"
+              >
+                <Save className="h-4 w-4" />
+                <span>{isSaving ? 'Salvando Alterações...' : 'Salvar Configurações'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {/* Tab: Supabase & Deploy */}
