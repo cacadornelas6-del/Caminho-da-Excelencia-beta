@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: '/Caminho-da-Excelencia/',
+    base: '/Caminho-da-Excelencia-beta/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
